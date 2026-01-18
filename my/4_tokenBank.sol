@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
 contract tokenBank{
+    //用户地址=>代币地址=>金额
     mapping(address =>mapping(address => uint)) userTokenBalance;
 
     event depositEvent(address user,address token,uint256 amount);
@@ -10,24 +13,19 @@ contract tokenBank{
     error WithdrawNotZero();
     error DepositNotZero();
     error TokenBalanceNotEnough();
-    error CallFailure(string);
 
     //存款
-    function deposit(address _token,uint256 _amount) public payable {
+    function deposit(address _token,uint256 _amount) public {
         if(_amount==0) revert DepositNotZero();
+        
+        //代币
+        IERC20 token = IERC20(_token);
 
-        //查询用户在token的余额
-        (bool success1,bytes memory data1)=_token.call( abi.encodeWithSignature("balanceOf(address)", msg.sender) );
-        if(!success1) revert CallFailure("balaceOf");
-        if( _amount > abi.decode(data1, (uint256) ) ) revert TokenBalanceNotEnough();
-
-        //授权
-        (bool success2,bytes memory data2)=_token.delegatecall( abi.encodeWithSignature("approve(address,uint256)", address(this),_amount));
-        if(!success2 || !abi.decode(data2, (bool))) revert CallFailure("approve");
-
+        //查询用户授权给合约的余额
+        if(_amount > token.allowance(msg.sender,address(this)) ) revert TokenBalanceNotEnough();
+        
         //转账
-        (bool success3,bytes memory data3)=_token.call( abi.encodeWithSignature("transferFrom(address,address,uint256)", msg.sender,address(this),_amount) );
-        if(!success3 || !abi.decode(data3, (bool))) revert CallFailure("transferFrom");
+        token.transferFrom(msg.sender, address(this), _amount);
 
         //信息存储到本地合约
         userTokenBalance[msg.sender][_token]+=_amount;
@@ -39,7 +37,10 @@ contract tokenBank{
     function withdraw(address _token,uint256 _amount) public payable {
         if(_amount==0) revert WithdrawNotZero();
 
-        //查询用户授权给本合约的余额
+        //代币
+        IERC20 token = IERC20(_token);
+
+        //查询用户给本合约的余额
         if( _amount > userTokenBalance[msg.sender][_token] ) revert TokenBalanceNotEnough();
 
         //更新本地余额
@@ -47,7 +48,6 @@ contract tokenBank{
         emit withdrawEvent(msg.sender,_token,_amount);
 
         //转账给用户
-        (bool success,bytes memory data)=_token.call(abi.encodeWithSignature( "transfer(address, uint256)", msg.sender,_amount) );
-        if(!success || !abi.decode(data, (bool))) revert CallFailure("transfer");
+        token.transfer(msg.sender, _amount);
     }
 }
