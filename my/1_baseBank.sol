@@ -47,7 +47,7 @@ contract EtherBank{
     }
 
     //存款
-    function deposit(address _to) public payable {
+    function deposit(address _to) public payable virtual  {
         if(msg.value == 0){
             revert DepositNotZero();
         }
