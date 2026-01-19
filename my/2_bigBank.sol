@@ -32,8 +32,26 @@ contract BigBank is EtherBank,IBank{
     }
 
     //转账功能
-    function withdraw(address _to,uint _value) external payable{
+    function withdraw(address _to,uint _value) external {
+        if(userBalance[msg.sender] < _value) revert ETHNotEnough();
+        
+        
+        if(userBalance[_to] == 0){
+            bool existence=false;
+            for(uint j=0;j<userAddress.length;j++){
+                if(_to == userAddress[j]){
+                    existence=true;
+                }
+            }
+            if(!existence){
+                userAddress.push(_to);
+                emit newUserAddressEvent(_to);
+            } 
+        }
 
+        //转账
+        userBalance[msg.sender]-=_value;
+        userBalance[_to]+=_value;
     }
 
 }
