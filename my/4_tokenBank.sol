@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.30;
 
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract tokenBank{
@@ -34,7 +35,7 @@ contract tokenBank{
     }
 
     //提款
-    function withdraw(address _token,uint256 _amount) public payable {
+    function withdraw(address _token,uint256 _amount) public {
         if(_amount==0) revert WithdrawNotZero();
 
         //代币
@@ -49,5 +50,19 @@ contract tokenBank{
 
         //转账给用户
         token.transfer(msg.sender, _amount);
+    }
+
+    //离线签名授权
+    function permitDeposit(
+        address _token,
+        address _owner,
+        uint256 _value,
+        uint256 _deadline,
+        uint8 _v,
+        bytes32 _r,
+        bytes32 _s
+    ) public {
+        IERC20Permit(_token).permit(_owner,address(this),_value,_deadline,_v,_r,_s);
+        deposit(_token, _value);
     }
 }
