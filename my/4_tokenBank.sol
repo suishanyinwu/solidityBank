@@ -9,54 +9,72 @@ import "./6_ITokenRecipient.sol";
 contract tokenBank is ITokenRecipient{
     using SafeERC20 for IERC20;
     //用户地址=>代币地址=>金额
-    mapping(address =>mapping(address => uint)) userTokenBalance;
+    mapping(address => mapping(address => uint256)) userTokenBalance;
+    //代币地址=>合约储备总金额
+    mapping(address => uint256) tokenTotalReserves;
 
     event depositEvent(address user,address token,uint256 amount);
-    event withdrawEvent(address to,address token,uint value);
+    event withdrawEvent(address to,address token,uint256 value);
+    event tokenReservesChangeEvent(address token,uint256 oldReserves,uint256 newReserves);
 
-    error WithdrawNotZero();
-    error DepositNotZero();
+    error AmountNotZero();
+    error TokenTransferError();
     error TokenBalanceNotEnough();
     error TransferAddressError();
     error AddressNotToken();
 
     //存款
     function deposit(address _token,uint256 _amount) public {
-        if(_amount==0) revert DepositNotZero();
-        if(_token==address(0) || _token.code.length==0 ) revert AddressNotToken();
+        if( _amount==0 ) revert AmountNotZero();
+        if( _token==address(0) || _token.code.length==0 ) revert AddressNotToken();
         
-        //代币
         IERC20 token = IERC20(_token);
-
-        //查询用户授权给合约的余额
-        if(_amount > token.allowance(msg.sender,address(this)) ) revert TokenBalanceNotEnough();
+        if( _amount > token.allowance(msg.sender,address(this)) ) revert TokenBalanceNotEnough();
         
-        //转账
         token.safeTransferFrom(msg.sender, address(this), _amount);
 
-        //信息存储到本地合约
-        userTokenBalance[msg.sender][_token]+=_amount;
-        emit depositEvent(msg.sender, _token, _amount);
+        _depositInformationChange(msg.sender, _token, _amount);
 
+    }
+
+    //存款-本地信息修改
+    function _depositInformationChange(address _user,address _token,uint256 _amount) private {
+        uint256 oldReserves = tokenTotalReserves[_token];
+        uint256 newReserves = IERC20(_token).balanceOf(address(this));
+        if( newReserves-oldReserves < _amount ) revert TokenTransferError();
+
+        userTokenBalance[_user][_token]+=_amount;
+        emit depositEvent(_user, _token, _amount);
+
+        tokenTotalReserves[_token]=newReserves;
+        emit tokenReservesChangeEvent(_token, oldReserves, newReserves);
     }
 
     //提款
     function withdraw(address _token,uint256 _amount) public {
-        if(_amount==0) revert WithdrawNotZero();
+        if(_amount==0) revert AmountNotZero();
         if(_token==address(0) || _token.code.length==0 ) revert AddressNotToken();
-
-        //代币
+        
         IERC20 token = IERC20(_token);
-
-        //查询用户给本合约的余额
         if( _amount > userTokenBalance[msg.sender][_token] ) revert TokenBalanceNotEnough();
 
-        //更新本地余额
-        userTokenBalance[msg.sender][_token]-=_amount;
-        emit withdrawEvent(msg.sender,_token,_amount);
+        token.safeTransfer(msg.sender,_amount);
 
-        //转账给用户
-        token.safeTransfer(msg.sender, _amount);
+        _withdrawInformationChange(msg.sender, _token, _amount);
+    }
+
+    //提款-本地信息修改
+    function _withdrawInformationChange(address _user,address _token,uint256 _amount) private {
+        uint256 oldReserves = tokenTotalReserves[_token];
+        uint256 newReserves = IERC20(_token).balanceOf(address(this));
+        if( oldReserves - newReserves < _amount ) revert TokenTransferError();
+
+        userTokenBalance[_user][_token]-=_amount;
+        emit withdrawEvent(_user, _token, _amount);
+
+        tokenTotalReserves[_token]=newReserves;
+        emit tokenReservesChangeEvent(_token, oldReserves, newReserves);
+
     }
 
     //离线签名授权
@@ -75,21 +93,11 @@ contract tokenBank is ITokenRecipient{
 
     //回调函数
     function onTransferReceived(address _from,uint256 _amount) external {
-        if(_amount==0) revert DepositNotZero();
+        if(_amount==0) revert AmountNotZero();
         if(_from==address(0) || _from.code.length!=0 ) revert TransferAddressError();
         if( msg.sender.code.length==0 ) revert AddressNotToken();
 
-        //代币
-        IERC20 token = IERC20(msg.sender);
-
-        //查询用户授权给合约的余额
-        if(_amount > token.allowance(_from,address(this)) ) revert TokenBalanceNotEnough();
-        
-        //转账
-        token.safeTransferFrom(_from, address(this), _amount);
-
-        //更新本地余额
-        userTokenBalance[_from][msg.sender]+=_amount;
-        emit withdrawEvent(_from,msg.sender,_amount);
+        //更新本地信息
+        _depositInformationChange(_from, msg.sender, _amount);
     }
 }
