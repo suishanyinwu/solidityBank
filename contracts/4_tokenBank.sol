@@ -19,8 +19,8 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
 
     event depositEvent(address indexed user,address indexed token,uint256 amount);
     event withdrawEvent(address indexed to,address indexed token,uint256 value);
-    event Paused(address account);
-    event Unpaused(address account);
+    event Paused(address account, uint256 timestamp);
+    event Unpaused(address account, uint256 timestamp);
 
     error ZeroAmount();
     error InvalidTokenAddress();
@@ -39,30 +39,49 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
     // 紧急暂停（仅管理员）
     function pause() external onlyOwner {
         _paused = true;
-        emit Paused(msg.sender);
+        emit Paused(msg.sender, block.timestamp);
     }
 
     function unpause() external onlyOwner {
         _paused = false;
-        emit Unpaused(msg.sender);
+        emit Unpaused(msg.sender, block.timestamp);
     }
 
+    //同步储备金的函数（仅管理员）
+    function syncReserves(address _token) external onlyOwner {
+        if( _token==address(0) || _token.code.length==0 ) revert InvalidTokenAddress();
+        _tokenReserves[_token] = IERC20(_token).balanceOf(address(this));
+    }
 
-    function deposit(address _token, uint256 _amount) public nonReentrant whenNotPaused {
+    /**
+     * @dev ERC20代币存款
+     * @param _token 代币合约地址
+     * @param _amount 存款金额
+     */
+    function deposit(address _token, uint256 _amount) external nonReentrant whenNotPaused {
         if( _amount==0 ) revert ZeroAmount();
         if( _token==address(0) || _token.code.length==0 ) revert InvalidTokenAddress();
         
         IERC20 token = IERC20(_token);
+        uint256 beforeBalance = token.balanceOf(address(this));
         token.safeTransferFrom(msg.sender, address(this), _amount);
 
-        _userTokenBalance[msg.sender][_token] += _amount;
-        _tokenReserves[_token] += _amount;
+        uint256 actualReceived = token.balanceOf(address(this)) - beforeBalance;
+        if (actualReceived == 0) revert TransferFailed();
 
-        emit depositEvent(msg.sender, _token, _amount);
+        _userTokenBalance[msg.sender][_token] +=actualReceived;
+        _tokenReserves[_token] += actualReceived;
+
+        emit depositEvent(msg.sender, _token, actualReceived);
     }
 
-  
-    function withdraw(address _token,uint256 _amount) public nonReentrant whenNotPaused {
+
+    /**
+     * @dev ERC20代币提款
+     * @param _token 代币合约地址
+     * @param _amount 提款金额
+     */
+    function withdraw(address _token,uint256 _amount) external nonReentrant whenNotPaused {
         if( _amount==0 ) revert ZeroAmount();
         if( _token==address(0) || _token.code.length==0 ) revert InvalidTokenAddress();
 
@@ -95,24 +114,42 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
         if( _token==address(0) || _token.code.length==0 ) revert InvalidTokenAddress();
         
         IERC20Permit(_token).permit(_owner,address(this),_value,_deadline,_v,_r,_s);
-        deposit(_token, _value);
+        
+        // 手动处理存款，归属_owner
+        IERC20 token = IERC20(_token);
+        uint256 beforeBalance = token.balanceOf(address(this));
+        token.safeTransferFrom(_owner, address(this), _value);
+        
+        uint256 actualReceived = token.balanceOf(address(this)) - beforeBalance;
+        if (actualReceived == 0) revert TransferFailed();
+
+        _userTokenBalance[_owner][_token] += actualReceived;
+        _tokenReserves[_token] += actualReceived;
+
+        emit depositEvent(_owner, _token, actualReceived);
     }
 
-
+    /**
+     * @dev 接收代币转账的回调函数（需代币合约支持回调）
+     * @param _from 转账发起方
+     * @param _amount 转账金额
+     */
     function onTransferReceived(address _from,uint256 _amount) external nonReentrant whenNotPaused {
         if( _amount==0 ) revert ZeroAmount();
-        if(_from==address(0) || _from.code.length!=0 ) revert TransferAddressError();
+        if(_from==address(0) ) revert TransferAddressError();
         if( msg.sender.code.length==0 ) revert InvalidTokenAddress();
 
         IERC20 token = IERC20(msg.sender);
-        uint256 contractBalance = token.balanceOf(address(this));
-        uint256 expectedReserve = _tokenReserves[msg.sender] + _amount;
-        if (contractBalance < expectedReserve) revert TransferFailed();
+        uint256 beforeBalance = _tokenReserves[msg.sender];
+        uint256 actualReceived = token.balanceOf(address(this)) - beforeBalance;
 
-        _userTokenBalance[_from][msg.sender] += _amount;
-        _tokenReserves[msg.sender] = expectedReserve;
+        //手续费token需要将实际转账的金额作为_amount传入
+        if (actualReceived == 0 || actualReceived != _amount) revert TransferFailed();
 
-        emit depositEvent(_from, msg.sender, _amount);
+        _userTokenBalance[_from][msg.sender] += actualReceived;
+        _tokenReserves[msg.sender] += actualReceived;
+
+        emit depositEvent(_from, msg.sender, actualReceived);
     }
 
     // 查询函数
@@ -126,5 +163,9 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
 
     function getContractBalance(address _token) external view returns (uint256) {
         return IERC20(_token).balanceOf(address(this));
+    }
+
+    function paused() external view returns (bool) {
+        return _paused;
     }
 }
