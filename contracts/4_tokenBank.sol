@@ -21,6 +21,7 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
     event withdrawEvent(address indexed to,address indexed token,uint256 value);
     event Paused(address account, uint256 timestamp);
     event Unpaused(address account, uint256 timestamp);
+    event ReservesSynced(address indexed token, uint256 oldReserve, uint256 newReserve);
 
     error ZeroAmount();
     error InvalidTokenAddress();
@@ -29,6 +30,7 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
     error TransferFailed();
     error InsufficientContractBalance();
     error ContractPaused();
+    error ActualReceivedExceedsRequested(); // 实际到账金额不能大于发起金额
 
     // 暂停修饰器
     modifier whenNotPaused() {
@@ -50,7 +52,9 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
     //同步储备金的函数（仅管理员）
     function syncReserves(address _token) external onlyOwner {
         if( _token==address(0) || _token.code.length==0 ) revert InvalidTokenAddress();
+        uint256 oldReserve = _tokenReserves[_token];
         _tokenReserves[_token] = IERC20(_token).balanceOf(address(this));
+        emit ReservesSynced(_token, oldReserve, _tokenReserves[_token]);
     }
 
     /**
@@ -68,9 +72,10 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
 
         uint256 actualReceived = token.balanceOf(address(this)) - beforeBalance;
         if (actualReceived == 0) revert TransferFailed();
+        if (actualReceived > _amount) revert ActualReceivedExceedsRequested();
 
         _userTokenBalance[msg.sender][_token] +=actualReceived;
-        _tokenReserves[_token] += actualReceived;
+        _tokenReserves[_token] = token.balanceOf(address(this));
 
         emit depositEvent(msg.sender, _token, actualReceived);
     }
@@ -96,7 +101,7 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
         token.safeTransfer(msg.sender,_amount);
 
         _userTokenBalance[msg.sender][_token] -= _amount;
-        _tokenReserves[_token] -= _amount;
+        _tokenReserves[_token] = token.balanceOf(address(this));
 
         emit withdrawEvent(msg.sender, _token, _amount);
     }
@@ -115,16 +120,17 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
         
         IERC20Permit(_token).permit(_owner,address(this),_value,_deadline,_v,_r,_s);
         
-        // 手动处理存款，归属_owner
         IERC20 token = IERC20(_token);
         uint256 beforeBalance = token.balanceOf(address(this));
+        _tokenReserves[_token] = beforeBalance;
         token.safeTransferFrom(_owner, address(this), _value);
         
         uint256 actualReceived = token.balanceOf(address(this)) - beforeBalance;
         if (actualReceived == 0) revert TransferFailed();
+        if (actualReceived > _value) revert ActualReceivedExceedsRequested();
 
         _userTokenBalance[_owner][_token] += actualReceived;
-        _tokenReserves[_token] += actualReceived;
+        _tokenReserves[msg.sender] = token.balanceOf(address(this));
 
         emit depositEvent(_owner, _token, actualReceived);
     }
@@ -147,7 +153,7 @@ contract tokenBank is ITokenRecipient, ReentrancyGuard, Ownable(msg.sender) {
         if (actualReceived == 0 || actualReceived != _amount) revert TransferFailed();
 
         _userTokenBalance[_from][msg.sender] += actualReceived;
-        _tokenReserves[msg.sender] += actualReceived;
+        _tokenReserves[msg.sender] = token.balanceOf(address(this));
 
         emit depositEvent(_from, msg.sender, actualReceived);
     }
